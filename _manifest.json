@@ -1,0 +1,43 @@
+{
+  "manifest_version": 1,
+  "name": "麦麦细说 (Detailed Explanation Plugin)",
+  "version": "1.0.0",
+  "description": "当需要详细解释科普、技术等复杂内容时，生成完整的长文本回复并智能分段发送",
+  "author": {
+    "name": "CharTyr",
+    "url": "https://github.com/CharTyr"
+  },
+  "license": "GPL-v3.0-or-later",
+  
+  "host_application": {
+    "min_version": "0.10.2"
+  },
+  "homepage_url": "https://github.com/MaiM-with-u/maibot",
+  "repository_url": "https://github.com/MaiM-with-u/maibot",
+  "keywords": ["explanation", "detailed", "science", "education", "long-text"],
+  "categories": ["Education", "Communication"],
+  
+  "default_locale": "zh-CN",
+  "locales_path": "_locales",
+  
+  "plugin_info": {
+    "is_built_in": false,
+    "plugin_type": "communication",
+    "components": [
+      {
+        "type": "action",
+        "name": "detailed_explanation",
+        "description": "生成详细的长文本解释并智能分段发送",
+        "activation_modes": ["keyword"],
+        "keywords": ["详细", "科普", "解释", "说明", "原理", "深入", "具体", "详细说说"]
+      }
+    ],
+    "features": [
+      "智能识别需要详细解释的场景",
+      "生成完整的长文本回复",
+      "根据内容长度智能分段发送",
+      "支持科普、技术解答等复杂内容",
+      "可配置分段参数和发送延迟"
+    ]
+  }
+}
