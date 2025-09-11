@@ -130,8 +130,8 @@
 - **兼容性**: MaiBot 0.8.0+
 - **许可证**: GPL-v3.0-or-later
 
-## MaiBot开发者信息
+## 开发者信息
 
-- **开发者**: MaiBot开发团队
+- **开发团队**: MaiBot开发团队
 - **项目地址**: https://github.com/MaiM-with-u/maibot
 - **问题反馈**: 请在GitHub仓库中提交Issue

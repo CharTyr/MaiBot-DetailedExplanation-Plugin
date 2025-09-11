@@ -31,14 +31,14 @@ class DetailedExplanationAction(BaseAction):
     action_name = "detailed_explanation"
     action_description = "生成详细的长文本解释并智能分段发送"
     
-    # 使用关键词激活，但采用更精确的关键词
-    activation_type = ActionActivationType.KEYWORD
+    # 改为由 LLM 判断是否需要使用该动作（Planner 会始终看到该动作选项）
+    activation_type = ActionActivationType.LLM_JUDGE
 
-    # 更精确的关键词组合，减少误判
+    # 备用关键词（用于其他组件或回退策略，不影响 LLM_JUDGE 的主流程）
     activation_keywords = [
-        "详细科普", "深入解释", "详细说明", "科普一下", "详细讲解",
-        "详细介绍", "深入分析", "具体解释", "详细阐述", "深度解析",
-        "请详细", "详细说说", "深入了解", "具体说明", "详细分析"
+        "详细", "科普", "解释", "说明", "原理", "深入", "具体",
+        "详细说说", "展开讲讲", "多讲讲", "详细介绍", "深入分析",
+        "详细阐述", "深度解析", "请详细", "请展开"
     ]
     keyword_case_sensitive = False
 
@@ -100,12 +100,12 @@ class DetailedExplanationAction(BaseAction):
             enable_chinese_typo = self.get_config("content_generation.enable_chinese_typo", False)
             extra_prompt = self.get_config("content_generation.extra_prompt", "")
             
-            # 构建额外信息，指导生成详细内容
+            # 构建额外信息，指导生成详细内容（结构化，促进长文输出）
             detailed_instruction = (
                 "请提供详细、完整的解释，不要受到字数限制。"
-                "深入阐述相关概念、原理和细节。"
-                "可以包含背景知识、实例说明和相关扩展。"
-                "保持回答的逻辑性和条理性。"
+                "请按‘概览→核心概念→工作原理/流程→关键要点与易错点→案例与对比→局限与常见误区→延伸阅读与参考’的结构展开。"
+                "在每个小节下给出尽可能充足的信息与示例，必要时给出列表与小标题。"
+                "保持回答的逻辑性和条理性，优先中文输出。"
             )
             
             if extra_prompt:
@@ -126,13 +126,41 @@ class DetailedExplanationAction(BaseAction):
 
             if success and llm_response and llm_response.content:
                 content = llm_response.content.strip()
-                
-                # 检查长度限制
-                max_length = self.get_config("detailed_explanation.max_total_length", 3000)
+
+                # 从配置读取最小/最大长度，添加二次扩写逻辑
+                min_length = int(self.get_config("detailed_explanation.min_total_length", 200))
+                max_length = int(self.get_config("detailed_explanation.max_total_length", 2400))
+
+                # 太短则尝试二次扩写（最多两次）
+                retry = 0
+                while len(content) < min_length and retry < 2:
+                    logger.info(f"{self.log_prefix} 内容偏短({len(content)}<{min_length})，进行第{retry+1}次扩写")
+                    expand_prompt = (
+                        "在上文基础上继续详细展开，不要重复，补充更多背景、细节、案例与类比，"
+                        "并加入‘常见问题与解答’与‘实践建议/操作步骤’两个小节。"
+                    )
+                    if extra_prompt:
+                        expand_prompt += f" {extra_prompt}"
+                    succ2, resp2 = await generator_api.generate_reply(
+                        chat_stream=self.chat_stream,
+                        reply_message=self.action_message,
+                        extra_info=expand_prompt,
+                        reply_reason="长文二次扩写",
+                        enable_tool=enable_tools,
+                        enable_splitter=False,
+                        enable_chinese_typo=enable_chinese_typo,
+                        request_type="detailed_explanation",
+                        from_plugin=True,
+                    )
+                    if succ2 and resp2 and resp2.content:
+                        content = (content + "\n\n" + resp2.content.strip()).strip()
+                    retry += 1
+
+                # 检查长度上限
                 if len(content) > max_length:
                     logger.warning(f"{self.log_prefix} 生成的内容过长({len(content)}字符)，截断到{max_length}字符")
                     content = content[:max_length] + "..."
-                
+
                 logger.info(f"{self.log_prefix} 成功生成详细内容，长度: {len(content)}字符")
                 return True, content
             else:

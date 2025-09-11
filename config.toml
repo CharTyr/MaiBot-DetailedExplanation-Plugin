@@ -21,10 +21,11 @@ enabled = true
 enable = true
 
 # 最大总文本长度限制（字符数）
-max_total_length = 3000
+max_total_length = 2400
+min_total_length = 200
 
 # 每段目标长度（字符数）
-segment_length = 400
+segment_length = 600
 
 # 最小分段数
 min_segments = 1
@@ -51,10 +52,10 @@ activation_probability = 0.05
 [activation]
 
 # 激活类型：keyword（关键词）、llm_judge（LLM判断）、mixed（混合模式）
-activation_mode = "keyword"
+activation_mode = "llm_judge"
 
 # 是否启用严格模式（更精确的关键词匹配，减少误判）
-strict_mode = true
+strict_mode = false
 
 # 自定义关键词列表（仅在keyword模式下生效）
 custom_keywords = []
