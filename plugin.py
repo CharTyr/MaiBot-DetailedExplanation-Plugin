@@ -175,7 +175,7 @@ class DetailedExplanationAction(BaseAction):
         """将内容分割成段落"""
         try:
             # 获取配置
-            segment_length = self.get_config("detailed_explanation.segment_length", 400)
+            segment_length = self.get_config("detailed_explanation.segment_length", 600)
             min_segments = self.get_config("detailed_explanation.min_segments", 1)
             max_segments = self.get_config("detailed_explanation.max_segments", 4)
             algorithm = self.get_config("segmentation.algorithm", "smart")
