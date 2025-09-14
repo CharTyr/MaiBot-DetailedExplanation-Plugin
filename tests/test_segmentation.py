@@ -79,3 +79,24 @@ def test_segment_merge_preserves_newlines():
     content = "A" * 10 + "B" * 10 + "C" * 10
     segments = action._split_content_into_segments(content)
     assert segments == ["A" * 10, "B" * 10 + "\n\n" + "C" * 10]
+
+
+class DummyMinSegmentsAction(DetailedExplanationAction):
+    def __init__(self):
+        self.log_prefix = "test"
+
+    def get_config(self, key, default=None):
+        configs = {
+            "detailed_explanation.segment_length": 30,
+            "detailed_explanation.min_segments": 3,
+            "detailed_explanation.max_segments": 3,
+            "segmentation.algorithm": "length",
+        }
+        return configs.get(key, default)
+
+
+def test_resplit_when_below_min_segments():
+    action = DummyMinSegmentsAction()
+    content = "A" * 40
+    segments = action._split_content_into_segments(content)
+    assert segments == ["A" * 13, "A" * 13, "A" * 13 + "\n\n" + "A"]

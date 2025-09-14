@@ -196,12 +196,14 @@ class DetailedExplanationAction(BaseAction):
             
             # 确保段数在限制范围内
             if len(segments) < min_segments:
-                # 如果段数太少，尝试合并
-                return [content]
-            elif len(segments) > max_segments:
+                # 按最小分段数重新按长度划分
+                target_length = max(1, len(content) // min_segments)
+                segments = self._length_split(content, target_length, max_segments)
+
+            if len(segments) > max_segments:
                 # 如果段数太多，合并后面的段，并保留段落间的换行
-                tail = "\n\n".join(segments[max_segments-1:])
-                segments = segments[:max_segments-1] + [tail]
+                tail = "\n\n".join(segments[max_segments - 1:])
+                segments = segments[:max_segments - 1] + [tail]
             
             logger.info(f"{self.log_prefix} 内容分割完成，共{len(segments)}段")
             return segments
