@@ -220,11 +220,21 @@ class DetailedExplanationAction(BaseAction):
         segments = []
         current_segment = ""
         
-        for paragraph in paragraphs:
+        for idx, paragraph in enumerate(paragraphs):
             paragraph = paragraph.strip()
             if not paragraph:
                 continue
-                
+
+            # 如果已达到最大段数-1，将剩余内容合并为最后一段
+            if len(segments) >= max_segments - 1:
+                remaining_parts = []
+                if current_segment:
+                    remaining_parts.append(current_segment)
+                remaining_parts.extend(p.strip() for p in paragraphs[idx:] if p.strip())
+                segments.append("\n\n".join(remaining_parts))
+                current_segment = ""
+                break
+
             # 如果当前段落加上新段落不超过目标长度，合并
             if len(current_segment + paragraph) <= target_length:
                 if current_segment:
@@ -235,7 +245,7 @@ class DetailedExplanationAction(BaseAction):
                 # 如果当前段不为空，先保存
                 if current_segment:
                     segments.append(current_segment)
-                
+
                 # 如果单个段落太长，按句子分割
                 if len(paragraph) > target_length:
                     sentences = self._split_by_sentences(paragraph)
@@ -250,7 +260,7 @@ class DetailedExplanationAction(BaseAction):
                     current_segment = temp_segment
                 else:
                     current_segment = paragraph
-        
+
         # 添加最后一段
         if current_segment:
             segments.append(current_segment)

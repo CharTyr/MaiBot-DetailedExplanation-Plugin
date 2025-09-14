@@ -79,3 +79,24 @@ def test_segment_merge_preserves_newlines():
     content = "A" * 10 + "B" * 10 + "C" * 10
     segments = action._split_content_into_segments(content)
     assert segments == ["A" * 10, "B" * 10 + "\n\n" + "C" * 10]
+
+
+class DummySmartAction(DetailedExplanationAction):
+    def __init__(self):
+        self.log_prefix = "test"
+
+    def get_config(self, key, default=None):
+        configs = {
+            "detailed_explanation.segment_length": 5,
+            "detailed_explanation.min_segments": 1,
+            "detailed_explanation.max_segments": 2,
+            "segmentation.algorithm": "smart",
+        }
+        return configs.get(key, default)
+
+
+def test_smart_split_respects_max_segments():
+    action = DummySmartAction()
+    content = "AAAA" + "\n\n" + "BBBB" + "\n\n" + "CCCC" + "\n\n" + "DDDD"
+    segments = action._split_content_into_segments(content)
+    assert segments == ["AAAA", "BBBB\n\nCCCC\n\nDDDD"]
