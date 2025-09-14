@@ -60,18 +60,21 @@ sys.modules["src.plugin_system.apis"] = apis
 
 from plugin import DetailedExplanationAction
 
+
 class DummyAction(DetailedExplanationAction):
-    def __init__(self):
+    def __init__(self, config=None):
         self.log_prefix = "test"
+        if config is None:
+            config = {
+                "detailed_explanation.segment_length": 10,
+                "detailed_explanation.min_segments": 1,
+                "detailed_explanation.max_segments": 2,
+                "segmentation.algorithm": "length",
+            }
+        self._config = config
 
     def get_config(self, key, default=None):
-        configs = {
-            "detailed_explanation.segment_length": 10,
-            "detailed_explanation.min_segments": 1,
-            "detailed_explanation.max_segments": 2,
-            "segmentation.algorithm": "length",
-        }
-        return configs.get(key, default)
+        return self._config.get(key, default)
 
 
 def test_segment_merge_preserves_newlines():
@@ -79,3 +82,36 @@ def test_segment_merge_preserves_newlines():
     content = "A" * 10 + "B" * 10 + "C" * 10
     segments = action._split_content_into_segments(content)
     assert segments == ["A" * 10, "B" * 10 + "\n\n" + "C" * 10]
+
+
+def _build_action(algorithm):
+    config = {
+        "detailed_explanation.segment_length": 25,
+        "detailed_explanation.min_segments": 1,
+        "detailed_explanation.max_segments": 10,
+        "segmentation.algorithm": algorithm,
+        "segmentation.keep_paragraph_integrity": True,
+        "segmentation.min_paragraph_length": 5,
+    }
+    return DummyAction(config)
+
+
+def test_paragraph_merging_smart():
+    action = _build_action("smart")
+    content = "A" * 3 + "\n\n" + "B" * 3 + "\n\n" + "C" * 20
+    segments = action._split_content_into_segments(content)
+    assert segments == ["A" * 3 + "\n\n" + "B" * 3, "C" * 20]
+
+
+def test_paragraph_merging_sentence():
+    action = _build_action("sentence")
+    content = "A" * 3 + "\n\n" + "B" * 3 + "\n\n" + "C" * 20
+    segments = action._split_content_into_segments(content)
+    assert segments == ["A" * 3 + "\n\n" + "B" * 3, "C" * 20]
+
+
+def test_paragraph_merging_length():
+    action = _build_action("length")
+    content = "A" * 3 + "\n\n" + "B" * 3 + "\n\n" + "C" * 20
+    segments = action._split_content_into_segments(content)
+    assert segments == ["A" * 3 + "\n\n" + "B" * 3, "C" * 20]
