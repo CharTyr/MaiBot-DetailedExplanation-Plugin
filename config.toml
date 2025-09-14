@@ -22,6 +22,8 @@ enable = true
 
 # 最大总文本长度限制（字符数）
 max_total_length = 2400
+
+# 最小总文本长度限制（字符数）
 min_total_length = 200
 
 # 每段目标长度（字符数）

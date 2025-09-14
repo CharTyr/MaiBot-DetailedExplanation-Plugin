@@ -60,6 +60,7 @@
 
 - `enable`: 是否启用插件 (默认: true)
 - `max_total_length`: 最大总文本长度限制 (默认: 3000字符)
+- `min_total_length`: 最小总文本长度限制 (默认: 200字符)
 - `segment_length`: 每段目标长度 (默认: 400字符)
 - `min_segments`: 最小分段数 (默认: 1)
 - `max_segments`: 最大分段数 (默认: 4)

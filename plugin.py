@@ -360,6 +360,7 @@ class DetailedExplanationPlugin(BasePlugin):
         "detailed_explanation": {
             "enable": ConfigField(type=bool, default=True, description="是否启用详细解释功能"),
             "max_total_length": ConfigField(type=int, default=3000, description="最大总文本长度限制"),
+            "min_total_length": ConfigField(type=int, default=200, description="最小总文本长度限制"),
             "segment_length": ConfigField(type=int, default=400, description="每段目标长度"),
             "min_segments": ConfigField(type=int, default=1, description="最小分段数"),
             "max_segments": ConfigField(type=int, default=4, description="最大分段数"),
