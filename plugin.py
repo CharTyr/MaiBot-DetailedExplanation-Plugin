@@ -6,7 +6,7 @@
 
 import asyncio
 import re
-from typing import List, Tuple, Type, Union
+from typing import List, Tuple, Type
 
 from src.plugin_system import (
     BasePlugin,
@@ -18,7 +18,9 @@ from src.plugin_system import (
     register_plugin,
     get_logger,
 )
-from src.plugin_system.apis import generator_api, send_api
+from src.plugin_system.apis import llm_api, tool_api
+from src.config.config import global_config
+from src.mood.mood_manager import mood_manager
 
 
 logger = get_logger("detailed_explanation")
@@ -75,7 +77,7 @@ class DetailedExplanationAction(BaseAction):
                 keywords.extend([k for k in custom_keywords if isinstance(k, str)])
 
             if strict_mode:
-                keywords = [rf"\\b{re.escape(k)}\\b" for k in keywords]
+                # 说明：当前Planner仅做子串匹配，正则边界无效；保留原词并打开大小写敏感可减少误触发
                 self.keyword_case_sensitive = True
 
             self.activation_keywords = keywords
@@ -124,6 +126,7 @@ class DetailedExplanationAction(BaseAction):
             enable_tools = self.get_config("content_generation.enable_tools", True)
             enable_chinese_typo = self.get_config("content_generation.enable_chinese_typo", False)
             extra_prompt = self.get_config("content_generation.extra_prompt", "")
+            model_task_name = self.get_config("content_generation.model_task", "replyer")
             
             # 构建额外信息，指导生成详细内容（结构化，促进长文输出）
             detailed_instruction = (
@@ -136,21 +139,80 @@ class DetailedExplanationAction(BaseAction):
             if extra_prompt:
                 detailed_instruction += f" {extra_prompt}"
 
-            # 调用生成API，禁用分割器以获得完整长文本
-            success, llm_response = await generator_api.generate_reply(
-                chat_stream=self.chat_stream,
-                reply_message=self.action_message,
-                extra_info=detailed_instruction,
-                reply_reason="用户需要详细解释",
-                enable_tool=enable_tools,
-                enable_splitter=False,  # 关键：禁用分割器
-                enable_chinese_typo=enable_chinese_typo,
-                request_type="detailed_explanation",
-                from_plugin=True,
+            # 直连 LLM（绕过 replyer），构造提示词，带入人设与风格
+            user_text = self.action_message.processed_plain_text if self.action_message else ""
+            context_title = "群聊" if (self.chat_stream and self.chat_stream.group_info) else "私聊"
+
+            # 人设与风格
+            bot_name = global_config.bot.nickname
+            alias = ",也有人叫你" + ",".join(global_config.bot.alias_names) if global_config.bot.alias_names else ""
+            identity_block = f"你的名字是{bot_name}{alias}。"
+            persona_block = str(global_config.personality.personality or "").strip()
+            reply_style = str(global_config.personality.reply_style or "").strip()
+            emotion_style = str(global_config.personality.emotion_style or "").strip()
+            try:
+                current_mood = mood_manager.get_mood_by_chat_id(self.chat_stream.stream_id).mood_state
+            except Exception:
+                current_mood = "感觉很平静"
+
+            style_block = (
+                f"身份与人设：{identity_block}{persona_block}\n"
+                f"表达风格：{reply_style}\n"
+                f"情绪特征：{emotion_style}；当前心情：{current_mood}\n"
+            ).strip()
+
+            prompt = (
+                f"你现在是一个专业的讲解员，负责为用户做深入、系统的科普与解释。\n"
+                f"对话场景：{context_title}。\n"
+                f"{style_block}\n\n"
+                f"用户消息：{user_text}\n\n"
+                f"请基于用户的真实意图进行回答。{detailed_instruction}"
             )
 
-            if success and llm_response and llm_response.content:
-                content = llm_response.content.strip()
+            models = llm_api.get_available_models()
+            task_cfg = models.get(model_task_name) or models.get("replyer")
+            if not task_cfg:
+                logger.error(f"{self.log_prefix} 未找到可用的模型任务: {model_task_name}")
+                return False, ""
+
+            # 可选：联网搜索增强
+            search_enabled = bool(self.get_config("content_generation.enable_search", True))
+            search_mode = str(self.get_config("content_generation.search_mode", "auto")).lower()
+            search_block = ""
+            if search_enabled and user_text:
+                need_search = search_mode == "always"
+                if search_mode == "auto":
+                    # 简单启发式：时效/知识性问题更可能需要联网
+                    keywords = [
+                        "为什么", "怎么", "如何", "最新", "近期", "新闻", "更新", "发布",
+                        "爆料", "评测", "对比", "性能", "配置", "参数",
+                    ]
+                    need_search = any(k in user_text for k in keywords) or len(user_text) >= 12
+                if need_search:
+                    try:
+                        tool = tool_api.get_tool_instance("search_online")
+                        if tool:
+                            logger.info(f"{self.log_prefix} 触发联网搜索以增强长文内容")
+                            search_res = await tool.direct_execute(question=user_text[:200])  # type: ignore
+                            if search_res:
+                                search_block = (
+                                    "\n\n[联网检索摘要]\n" + str(search_res).strip() +
+                                    "\n\n请在保证准确性的前提下吸收以上信息，若与常识冲突以检索为准，避免无依据的臆测与捏造。"
+                                )
+                    except Exception as e:
+                        logger.warning(f"{self.log_prefix} 联网搜索失败，跳过: {e}")
+
+            if search_block:
+                prompt = prompt + search_block
+
+            success, content, _, _ = await llm_api.generate_with_model(
+                prompt=prompt,
+                model_config=task_cfg,
+                request_type="detailed_explanation",
+            )
+
+            if success and content:
+                content = content.strip()
 
                 # 从配置读取最小/最大长度，添加二次扩写逻辑
                 min_length = int(self.get_config("detailed_explanation.min_total_length", 200))
@@ -166,19 +228,13 @@ class DetailedExplanationAction(BaseAction):
                     )
                     if extra_prompt:
                         expand_prompt += f" {extra_prompt}"
-                    succ2, resp2 = await generator_api.generate_reply(
-                        chat_stream=self.chat_stream,
-                        reply_message=self.action_message,
-                        extra_info=expand_prompt,
-                        reply_reason="长文二次扩写",
-                        enable_tool=enable_tools,
-                        enable_splitter=False,
-                        enable_chinese_typo=enable_chinese_typo,
-                        request_type="detailed_explanation",
-                        from_plugin=True,
+                    succ2, more, _, _ = await llm_api.generate_with_model(
+                        prompt=f"基于以下已写内容继续扩写，不要重复：\n\n已写内容：\n{content}\n\n扩写指令：{expand_prompt}",
+                        model_config=task_cfg,
+                        request_type="detailed_explanation.expand",
                     )
-                    if succ2 and resp2 and resp2.content:
-                        content = (content + "\n\n" + resp2.content.strip()).strip()
+                    if succ2 and more:
+                        content = (content + "\n\n" + more.strip()).strip()
                     retry += 1
 
                 # 检查长度上限
@@ -387,6 +443,7 @@ class DetailedExplanationAction(BaseAction):
         try:
             send_delay = self.get_config("detailed_explanation.send_delay", 1.5)
             show_progress = self.get_config("detailed_explanation.show_progress", True)
+            start_hint_enabled = self.get_config("detailed_explanation.show_start_hint", True)
             
             for i, segment in enumerate(segments):
                 # 添加进度提示
@@ -396,7 +453,12 @@ class DetailedExplanationAction(BaseAction):
                     segment_with_progress = segment
                 
                 # 发送段落
-                await self.send_text(segment_with_progress)
+                await self.send_text(
+                    segment_with_progress,
+                    set_reply=(i == 0 and not start_hint_enabled),
+                    reply_message=self.action_message if (i == 0 and not start_hint_enabled) else None,
+                    typing=(i > 0),
+                )
                 
                 # 如果不是最后一段，等待一段时间
                 if i < len(segments) - 1:
@@ -432,7 +494,8 @@ class DetailedExplanationPlugin(BasePlugin):
     config_schema: dict = {
         "plugin": {
             "name": ConfigField(type=str, default="detailed_explanation", description="插件名称"),
-            "version": ConfigField(type=str, default="1.0.0", description="插件版本"),
+            "version": ConfigField(type=str, default="1.1.0", description="插件版本"),
+            "config_version": ConfigField(type=str, default="1.2.0", description="配置文件版本"),
             "enabled": ConfigField(type=bool, default=True, description="是否启用插件"),
         },
         "detailed_explanation": {
@@ -458,6 +521,9 @@ class DetailedExplanationPlugin(BasePlugin):
             "enable_chinese_typo": ConfigField(type=bool, default=False, description="是否启用中文错别字生成器"),
             "generation_timeout": ConfigField(type=int, default=30, description="生成超时时间"),
             "extra_prompt": ConfigField(type=str, default="", description="额外的prompt指令"),
+            "model_task": ConfigField(type=str, default="replyer", description="使用的模型任务集合(如 replyer/utils/utils_small)"),
+            "enable_search": ConfigField(type=bool, default=True, description="是否启用联网搜索增强"),
+            "search_mode": ConfigField(type=str, default="auto", description="联网搜索触发模式: auto/always/never"),
         },
         "segmentation": {
             "algorithm": ConfigField(type=str, default="smart", description="分段算法类型"),
