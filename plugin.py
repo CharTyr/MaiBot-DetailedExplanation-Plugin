@@ -35,11 +35,12 @@ class DetailedExplanationAction(BaseAction):
     activation_type = ActionActivationType.LLM_JUDGE
 
     # 备用关键词（用于其他组件或回退策略，不影响 LLM_JUDGE 的主流程）
-    activation_keywords = [
+    _default_activation_keywords = [
         "详细", "科普", "解释", "说明", "原理", "深入", "具体",
         "详细说说", "展开讲讲", "多讲讲", "详细介绍", "深入分析",
         "详细阐述", "深度解析", "请详细", "请展开"
     ]
+    activation_keywords = _default_activation_keywords.copy()
     keyword_case_sensitive = False
 
     # 降低随机激活概率
@@ -59,6 +60,30 @@ class DetailedExplanationAction(BaseAction):
         "优先考虑用户的真实意图，而非单纯的关键词匹配"
     ]
     associated_types = ["text"]
+
+    def __init__(self, *args, **kwargs):
+        """初始化并根据配置调整激活方式"""
+        super().__init__(*args, **kwargs)
+
+        activation_mode = str(self.get_config("activation.activation_mode", "llm_judge")).lower()
+        strict_mode = self.get_config("activation.strict_mode", False)
+        custom_keywords = self.get_config("activation.custom_keywords", []) or []
+
+        if activation_mode in {"keyword", "mixed"}:
+            keywords = self._default_activation_keywords.copy()
+            if isinstance(custom_keywords, list):
+                keywords.extend([k for k in custom_keywords if isinstance(k, str)])
+
+            if strict_mode:
+                keywords = [rf"\\b{re.escape(k)}\\b" for k in keywords]
+                self.keyword_case_sensitive = True
+
+            self.activation_keywords = keywords
+
+            if activation_mode == "keyword":
+                self.activation_type = getattr(ActionActivationType, "KEYWORD", self.activation_type)
+            else:
+                self.activation_type = getattr(ActionActivationType, "MIXED", self.activation_type)
 
     async def execute(self) -> Tuple[bool, str]:
         """执行详细解释动作"""
@@ -346,6 +371,7 @@ class DetailedExplanationPlugin(BasePlugin):
     config_section_descriptions = {
         "plugin": "插件基本信息",
         "detailed_explanation": "详细解释功能配置",
+        "activation": "激活方式配置",
         "content_generation": "内容生成配置",
         "segmentation": "分段算法配置"
     }
@@ -368,6 +394,11 @@ class DetailedExplanationPlugin(BasePlugin):
             "show_start_hint": ConfigField(type=bool, default=True, description="是否显示开始提示"),
             "start_hint_message": ConfigField(type=str, default="让我详细说明一下...", description="开始提示消息"),
             "activation_probability": ConfigField(type=float, default=0.1, description="激活概率"),
+        },
+        "activation": {
+            "activation_mode": ConfigField(type=str, default="llm_judge", description="激活类型"),
+            "strict_mode": ConfigField(type=bool, default=False, description="是否启用严格模式"),
+            "custom_keywords": ConfigField(type=list, default=[], description="自定义关键词列表"),
         },
         "content_generation": {
             "enable_tools": ConfigField(type=bool, default=True, description="是否启用工具调用"),
