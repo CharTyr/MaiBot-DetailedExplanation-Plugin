@@ -175,7 +175,8 @@ class DetailedExplanationAction(BaseAction):
         """将内容分割成段落"""
         try:
             # 获取配置
-            segment_length = self.get_config("detailed_explanation.segment_length", 600)
+            # 与配置和文档保持一致，默认段长为400字符
+            segment_length = self.get_config("detailed_explanation.segment_length", 400)
             min_segments = self.get_config("detailed_explanation.min_segments", 1)
             max_segments = self.get_config("detailed_explanation.max_segments", 4)
             algorithm = self.get_config("segmentation.algorithm", "smart")
@@ -198,8 +199,9 @@ class DetailedExplanationAction(BaseAction):
                 # 如果段数太少，尝试合并
                 return [content]
             elif len(segments) > max_segments:
-                # 如果段数太多，合并后面的段
-                segments = segments[:max_segments-1] + ["".join(segments[max_segments-1:])]
+                # 如果段数太多，合并后面的段，并保留段落间的换行
+                tail = "\n\n".join(segments[max_segments-1:])
+                segments = segments[:max_segments-1] + [tail]
             
             logger.info(f"{self.log_prefix} 内容分割完成，共{len(segments)}段")
             return segments
