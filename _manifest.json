@@ -12,8 +12,8 @@
   "host_application": {
     "min_version": "0.10.2"
   },
-  "homepage_url": "https://github.com/MaiM-with-u/maibot",
-  "repository_url": "https://github.com/MaiM-with-u/maibot",
+  "homepage_url": "https://github.com/CharTyr/MaiBot-DetailedExplanation-Plugin",
+  "repository_url": "https://github.com/CharTyr/MaiBot-DetailedExplanation-Plugin",
   "keywords": ["explanation", "detailed", "science", "education", "long-text"],
   "categories": ["Education", "Communication"],
   
