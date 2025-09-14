@@ -210,10 +210,38 @@ class DetailedExplanationAction(BaseAction):
             logger.error(f"{self.log_prefix} 分割内容时出错: {e}")
             return [content]  # 出错时返回原内容
 
+    def _prepare_paragraphs(self, content: str) -> List[str]:
+        """根据配置处理段落并合并过短段落"""
+        paragraphs = [p.strip() for p in re.split(r'\n\s*\n', content) if p.strip()]
+        keep_integrity = self.get_config("segmentation.keep_paragraph_integrity", True)
+        min_length = int(self.get_config("segmentation.min_paragraph_length", 50))
+
+        if not keep_integrity:
+            return paragraphs
+
+        merged: List[str] = []
+        temp = ""
+        for para in paragraphs:
+            if temp:
+                temp = temp + "\n\n" + para
+            else:
+                temp = para
+            if len(temp) >= min_length:
+                merged.append(temp)
+                temp = ""
+
+        if temp:
+            if merged:
+                merged[-1] += "\n\n" + temp
+            else:
+                merged.append(temp)
+
+        return merged
+
     def _smart_split(self, content: str, target_length: int, max_segments: int) -> List[str]:
         """智能分割算法"""
-        # 首先按段落分割
-        paragraphs = re.split(r'\n\s*\n', content)
+        # 处理段落并根据配置合并
+        paragraphs = self._prepare_paragraphs(content)
         if not paragraphs:
             return [content]
         
@@ -259,28 +287,52 @@ class DetailedExplanationAction(BaseAction):
 
     def _sentence_split(self, content: str, target_length: int, max_segments: int) -> List[str]:
         """按句子分割"""
-        sentences = self._split_by_sentences(content)
-        segments = []
-        current_segment = ""
-        
-        for sentence in sentences:
-            if len(current_segment + sentence) <= target_length:
-                current_segment += sentence
-            else:
+        keep_integrity = self.get_config("segmentation.keep_paragraph_integrity", True)
+        segments: List[str] = []
+
+        if keep_integrity:
+            paragraphs = self._prepare_paragraphs(content)
+            for paragraph in paragraphs:
+                sentences = self._split_by_sentences(paragraph)
+                current_segment = ""
+                for sentence in sentences:
+                    if len(current_segment + sentence) <= target_length:
+                        current_segment += sentence
+                    else:
+                        if current_segment:
+                            segments.append(current_segment)
+                        current_segment = sentence
                 if current_segment:
                     segments.append(current_segment)
-                current_segment = sentence
-        
-        if current_segment:
-            segments.append(current_segment)
-        
+        else:
+            sentences = self._split_by_sentences(content)
+            current_segment = ""
+            for sentence in sentences:
+                if len(current_segment + sentence) <= target_length:
+                    current_segment += sentence
+                else:
+                    if current_segment:
+                        segments.append(current_segment)
+                    current_segment = sentence
+            if current_segment:
+                segments.append(current_segment)
+
         return segments
 
     def _length_split(self, content: str, target_length: int, max_segments: int) -> List[str]:
         """按长度分割"""
-        segments = []
-        for i in range(0, len(content), target_length):
-            segments.append(content[i:i + target_length])
+        keep_integrity = self.get_config("segmentation.keep_paragraph_integrity", True)
+        segments: List[str] = []
+
+        if keep_integrity:
+            paragraphs = self._prepare_paragraphs(content)
+            for paragraph in paragraphs:
+                for i in range(0, len(paragraph), target_length):
+                    segments.append(paragraph[i:i + target_length])
+        else:
+            for i in range(0, len(content), target_length):
+                segments.append(content[i:i + target_length])
+
         return segments
 
     def _split_by_sentences(self, text: str) -> List[str]:
