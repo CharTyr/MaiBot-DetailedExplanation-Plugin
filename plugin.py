@@ -71,21 +71,25 @@ class DetailedExplanationAction(BaseAction):
         strict_mode = self.get_config("activation.strict_mode", False)
         custom_keywords = self.get_config("activation.custom_keywords", []) or []
 
-        if activation_mode in {"keyword", "mixed"}:
+        # 根据配置调整激活方式
+        if activation_mode == "keyword":
             keywords = self._default_activation_keywords.copy()
             if isinstance(custom_keywords, list):
                 keywords.extend([k for k in custom_keywords if isinstance(k, str)])
 
             if strict_mode:
-                # 说明：当前Planner仅做子串匹配，正则边界无效；保留原词并打开大小写敏感可减少误触发
+                # 严格模式下开启大小写敏感以减少误触发
                 self.keyword_case_sensitive = True
 
             self.activation_keywords = keywords
-
-            if activation_mode == "keyword":
-                self.activation_type = getattr(ActionActivationType, "KEYWORD", self.activation_type)
-            else:
-                self.activation_type = getattr(ActionActivationType, "MIXED", self.activation_type)
+            self.activation_type = ActionActivationType.KEYWORD
+        elif activation_mode == "always":
+            self.activation_type = ActionActivationType.ALWAYS
+        elif activation_mode == "random":
+            self.activation_type = ActionActivationType.RANDOM
+        elif activation_mode == "never":
+            self.activation_type = ActionActivationType.NEVER
+        # 默认保持 LLM_JUDGE
 
     async def execute(self) -> Tuple[bool, str]:
         """执行详细解释动作"""
@@ -494,7 +498,7 @@ class DetailedExplanationPlugin(BasePlugin):
     config_schema: dict = {
         "plugin": {
             "name": ConfigField(type=str, default="detailed_explanation", description="插件名称"),
-            "version": ConfigField(type=str, default="1.1.0", description="插件版本"),
+            "version": ConfigField(type=str, default="1.2.0", description="插件版本"),
             "config_version": ConfigField(type=str, default="1.2.0", description="配置文件版本"),
             "enabled": ConfigField(type=bool, default=True, description="是否启用插件"),
         },
@@ -512,7 +516,7 @@ class DetailedExplanationPlugin(BasePlugin):
             "activation_probability": ConfigField(type=float, default=0.1, description="激活概率"),
         },
         "activation": {
-            "activation_mode": ConfigField(type=str, default="llm_judge", description="激活类型"),
+            "activation_mode": ConfigField(type=str, default="llm_judge", description="激活类型: llm_judge/keyword/always/random/never"),
             "strict_mode": ConfigField(type=bool, default=False, description="是否启用严格模式"),
             "custom_keywords": ConfigField(type=list, default=[], description="自定义关键词列表"),
         },

@@ -1,7 +1,7 @@
 {
   "manifest_version": 1,
   "name": "麦麦细说 (Detailed Explanation Plugin)",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "当需要详细解释科普、技术等复杂内容时，生成完整的长文本回复并智能分段发送",
   "author": {
     "name": "CharTyr",
@@ -10,7 +10,7 @@
   "license": "GPL-v3.0-or-later",
   
   "host_application": {
-    "min_version": "0.10.2"
+    "min_version": "0.11.0"
   },
   "homepage_url": "https://github.com/CharTyr/MaiBot-DetailedExplanation-Plugin",
   "repository_url": "https://github.com/CharTyr/MaiBot-DetailedExplanation-Plugin",

@@ -8,7 +8,7 @@
 name = "detailed_explanation"
 
 # 插件版本
-version = "1.1.0"
+version = "1.2.0"
 
 # 配置文件版本
 config_version = "1.2.0"
@@ -57,7 +57,7 @@ activation_probability = 0.1
 # 激活方式配置
 [activation]
 
-# 激活类型
+# 激活类型: llm_judge / keyword / always / random / never
 activation_mode = "llm_judge"
 
 # 是否启用严格模式
