@@ -153,7 +153,7 @@ class DetailedExplanationAction(BaseAction):
             identity_block = f"你的名字是{bot_name}{alias}。"
             persona_block = str(global_config.personality.personality or "").strip()
             reply_style = str(global_config.personality.reply_style or "").strip()
-            emotion_style = str(global_config.personality.emotion_style or "").strip()
+            plan_style = str(global_config.personality.plan_style or "").strip()
             try:
                 current_mood = mood_manager.get_mood_by_chat_id(self.chat_stream.stream_id).mood_state
             except Exception:
@@ -162,7 +162,7 @@ class DetailedExplanationAction(BaseAction):
             style_block = (
                 f"身份与人设：{identity_block}{persona_block}\n"
                 f"表达风格：{reply_style}\n"
-                f"情绪特征：{emotion_style}；当前心情：{current_mood}\n"
+                f"行为风格：{plan_style}；当前心情：{current_mood}\n"
             ).strip()
 
             prompt = (
