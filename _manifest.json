@@ -1,7 +1,7 @@
 {
   "manifest_version": 1,
   "name": "麦麦细说 (Detailed Explanation Plugin)",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "当需要详细解释科普、技术等复杂内容时，生成完整的长文本回复并智能分段发送",
   "author": {
     "name": "CharTyr",
@@ -28,8 +28,19 @@
         "type": "action",
         "name": "detailed_explanation",
         "description": "生成详细的长文本解释并智能分段发送",
-        "activation_modes": ["keyword"],
+        "activation_modes": ["llm_judge", "keyword"],
         "keywords": ["详细", "科普", "解释", "说明", "原理", "深入", "具体", "详细说说"]
+      },
+      {
+        "type": "command",
+        "name": "detailed_explanation_cmd",
+        "description": "主动触发详细解释功能",
+        "pattern": "/细说, /explain, /详细, /科普"
+      },
+      {
+        "type": "tool",
+        "name": "detailed_explanation_tool",
+        "description": "供 LLM 调用的详细解释工具"
       }
     ],
     "features": [
@@ -37,7 +48,9 @@
       "生成完整的长文本回复",
       "根据内容长度智能分段发送",
       "支持科普、技术解答等复杂内容",
-      "可配置分段参数和发送延迟"
+      "可配置分段参数和发送延迟",
+      "支持命令主动触发：/细说 xxx",
+      "提供 LLM 可调用的工具接口"
     ]
   }
 }

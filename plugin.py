@@ -11,14 +11,16 @@ from typing import List, Tuple, Type
 from src.plugin_system import (
     BasePlugin,
     BaseAction,
-    ActionInfo,
+    BaseCommand,
+    BaseTool,
     ActionActivationType,
     ComponentInfo,
     ConfigField,
+    ToolParamType,
     register_plugin,
     get_logger,
 )
-from src.plugin_system.apis import llm_api, tool_api
+from src.plugin_system.apis import llm_api, tool_api, send_api
 from src.config.config import global_config
 from src.mood.mood_manager import mood_manager
 
@@ -474,6 +476,177 @@ class DetailedExplanationAction(BaseAction):
             logger.error(f"{self.log_prefix} 发送段落时出错: {e}")
 
 
+class DetailedExplanationCommand(BaseCommand):
+    """细说命令 - 用户主动触发详细解释"""
+
+    command_name = "detailed_explanation_cmd"
+    command_description = "主动触发详细解释功能"
+    # 支持: /细说 xxx, /explain xxx, /详细 xxx
+    command_pattern = r"^[/／](?:细说|explain|详细|科普)\s*(?P<topic>.*)$"
+
+    async def execute(self) -> Tuple[bool, str, bool]:
+        """执行命令"""
+        topic = self.matched_groups.get("topic", "").strip()
+
+        if not topic:
+            await self.send_text("请告诉我你想了解什么，例如：/细说 量子计算")
+            return True, "缺少主题", True
+
+        # 发送开始提示
+        show_hint = self.get_config("detailed_explanation.show_start_hint", True)
+        if show_hint:
+            hint = self.get_config("detailed_explanation.start_hint_message", "让我详细说明一下...")
+            await self.send_text(hint)
+            await asyncio.sleep(0.5)
+
+        # 生成详细内容
+        success, content = await self._generate_content(topic)
+        if not success:
+            await self.send_text("抱歉，生成详细解释时遇到了问题，请稍后再试")
+            return False, "生成失败", True
+
+        # 分段发送
+        segments = self._split_content(content)
+        await self._send_segments(segments)
+
+        return True, f"成功发送{len(segments)}段解释", True
+
+    async def _generate_content(self, topic: str) -> Tuple[bool, str]:
+        """生成详细内容"""
+        try:
+            model_task = self.get_config("content_generation.model_task", "replyer")
+            extra_prompt = self.get_config("content_generation.extra_prompt", "")
+
+            models = llm_api.get_available_models()
+            task_cfg = models.get(model_task) or models.get("replyer")
+            if not task_cfg:
+                return False, ""
+
+            prompt = (
+                f"请对以下主题进行详细、系统的解释：\n\n"
+                f"主题：{topic}\n\n"
+                f"请按'概览→核心概念→工作原理→关键要点→案例说明→常见误区'的结构展开。"
+                f"保持回答的逻辑性和条理性，优先中文输出。"
+            )
+            if extra_prompt:
+                prompt += f" {extra_prompt}"
+
+            # 联网搜索增强
+            if self.get_config("content_generation.enable_search", True):
+                try:
+                    tool = tool_api.get_tool_instance("search_online")
+                    if tool:
+                        search_res = await tool.direct_execute(question=topic[:200])
+                        if search_res:
+                            prompt += f"\n\n[参考资料]\n{str(search_res).strip()}"
+                except Exception:
+                    pass
+
+            success, content, _, _ = await llm_api.generate_with_model(
+                prompt=prompt,
+                model_config=task_cfg,
+                request_type="detailed_explanation.command",
+            )
+
+            if success and content:
+                max_len = self.get_config("detailed_explanation.max_total_length", 3000)
+                if len(content) > max_len:
+                    content = content[:max_len] + "..."
+                return True, content.strip()
+            return False, ""
+
+        except Exception as e:
+            logger.error(f"命令生成内容失败: {e}")
+            return False, ""
+
+    def _split_content(self, content: str) -> List[str]:
+        """分割内容"""
+        segment_len = self.get_config("detailed_explanation.segment_length", 400)
+        max_segments = self.get_config("detailed_explanation.max_segments", 4)
+
+        if len(content) <= segment_len:
+            return [content]
+
+        # 简单按段落分割
+        paragraphs = [p.strip() for p in re.split(r"\n\s*\n", content) if p.strip()]
+        segments = []
+        current = ""
+
+        for para in paragraphs:
+            if len(current + para) <= segment_len:
+                current = (current + "\n\n" + para).strip()
+            else:
+                if current:
+                    segments.append(current)
+                current = para
+
+        if current:
+            segments.append(current)
+
+        # 限制段数
+        if len(segments) > max_segments:
+            tail = "\n\n".join(segments[max_segments - 1 :])
+            segments = segments[: max_segments - 1] + [tail]
+
+        return segments
+
+    async def _send_segments(self, segments: List[str]) -> None:
+        """分段发送"""
+        delay = self.get_config("detailed_explanation.send_delay", 1.5)
+        show_progress = self.get_config("detailed_explanation.show_progress", True)
+
+        for i, seg in enumerate(segments):
+            text = f"({i+1}/{len(segments)}) {seg}" if show_progress and len(segments) > 1 else seg
+            await self.send_text(text)
+            if i < len(segments) - 1:
+                await asyncio.sleep(delay)
+
+
+class DetailedExplanationTool(BaseTool):
+    """详细解释工具 - 供 LLM 调用"""
+
+    name = "detailed_explanation_tool"
+    description = "生成详细的长文本解释。当需要对复杂概念、技术原理进行深入解释时使用此工具。"
+    parameters = [
+        ("topic", ToolParamType.STRING, "要详细解释的主题或问题", True, None),
+        ("context", ToolParamType.STRING, "相关的上下文信息（可选）", False, None),
+    ]
+    available_for_llm = True
+
+    async def execute(self, function_args: dict) -> dict:
+        """执行工具"""
+        topic = function_args.get("topic", "")
+        context = function_args.get("context", "")
+
+        if not topic:
+            return {"name": self.name, "content": "请提供要解释的主题"}
+
+        try:
+            models = llm_api.get_available_models()
+            task_cfg = models.get("replyer")
+            if not task_cfg:
+                return {"name": self.name, "content": "模型配置不可用"}
+
+            prompt = f"请对以下主题进行详细解释：\n\n主题：{topic}"
+            if context:
+                prompt += f"\n上下文：{context}"
+            prompt += "\n\n请提供结构化、详细的解释。"
+
+            success, content, _, _ = await llm_api.generate_with_model(
+                prompt=prompt,
+                model_config=task_cfg,
+                request_type="detailed_explanation.tool",
+            )
+
+            if success and content:
+                return {"name": self.name, "content": content.strip()}
+            return {"name": self.name, "content": "生成解释失败"}
+
+        except Exception as e:
+            logger.error(f"工具执行失败: {e}")
+            return {"name": self.name, "content": f"执行出错: {str(e)}"}
+
+
 @register_plugin
 class DetailedExplanationPlugin(BasePlugin):
     """麦麦细说插件主类"""
@@ -498,7 +671,7 @@ class DetailedExplanationPlugin(BasePlugin):
     config_schema: dict = {
         "plugin": {
             "name": ConfigField(type=str, default="detailed_explanation", description="插件名称"),
-            "version": ConfigField(type=str, default="1.2.0", description="插件版本"),
+            "version": ConfigField(type=str, default="1.3.0", description="插件版本"),
             "config_version": ConfigField(type=str, default="1.2.0", description="配置文件版本"),
             "enabled": ConfigField(type=bool, default=True, description="是否启用插件"),
         },
@@ -541,4 +714,6 @@ class DetailedExplanationPlugin(BasePlugin):
         """获取插件包含的组件列表"""
         return [
             (DetailedExplanationAction.get_action_info(), DetailedExplanationAction),
+            (DetailedExplanationCommand.get_command_info(), DetailedExplanationCommand),
+            (DetailedExplanationTool.get_tool_info(), DetailedExplanationTool),
         ]
