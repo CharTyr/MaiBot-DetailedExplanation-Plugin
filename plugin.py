@@ -125,6 +125,93 @@ class DetailedExplanationAction(BaseAction):
             logger.error(f"{self.log_prefix} 执行详细解释时出错: {e}")
             return False, f"执行详细解释时出错: {str(e)}"
 
+    def _detect_keyword_prompt(self, user_text: str) -> str:
+        """
+        检测用户输入中的关键词并返回对应的自定义 prompt
+        
+        Args:
+            user_text: 用户输入文本
+            
+        Returns:
+            str: 匹配的自定义 prompt，如果未匹配则返回空字符串
+        """
+        try:
+            # 检查是否启用关键词检测
+            if not self.get_config("keyword_prompts.enable", True):
+                return ""
+            
+            # 获取配置
+            rules = self.get_config("keyword_prompts.rules", [])
+            if not rules or not isinstance(rules, list):
+                return ""
+            
+            case_sensitive = self.get_config("keyword_prompts.case_sensitive", False)
+            match_strategy = self.get_config("keyword_prompts.match_strategy", "highest")
+            
+            # 准备用户文本（根据大小写敏感配置处理）
+            text_to_match = user_text if case_sensitive else user_text.lower()
+            
+            # 收集所有匹配的规则
+            matched_rules = []
+            
+            for rule in rules:
+                if not isinstance(rule, dict):
+                    continue
+                    
+                keywords = rule.get("keywords", [])
+                prompt = rule.get("prompt", "")
+                priority = rule.get("priority", 0)
+                
+                if not keywords or not prompt:
+                    continue
+                
+                # 检查是否有关键词匹配
+                for keyword in keywords:
+                    if not isinstance(keyword, str):
+                        continue
+                    
+                    keyword_to_match = keyword if case_sensitive else keyword.lower()
+                    
+                    if keyword_to_match in text_to_match:
+                        matched_rules.append({
+                            "prompt": prompt,
+                            "priority": priority,
+                            "keyword": keyword
+                        })
+                        logger.info(f"{self.log_prefix} 检测到关键词: {keyword} (优先级: {priority})")
+                        break  # 一个规则只需要匹配一次
+            
+            # 根据策略返回结果
+            if not matched_rules:
+                return ""
+            
+            if match_strategy == "first":
+                # 返回第一个匹配的
+                return matched_rules[0]["prompt"]
+            
+            elif match_strategy == "highest":
+                # 返回优先级最高的
+                matched_rules.sort(key=lambda x: x["priority"], reverse=True)
+                selected = matched_rules[0]
+                logger.info(f"{self.log_prefix} 选择优先级最高的规则 (优先级: {selected['priority']})")
+                return selected["prompt"]
+            
+            elif match_strategy == "merge":
+                # 合并所有匹配的 prompt（按优先级排序）
+                matched_rules.sort(key=lambda x: x["priority"], reverse=True)
+                merged_prompt = " ".join([rule["prompt"] for rule in matched_rules])
+                logger.info(f"{self.log_prefix} 合并了 {len(matched_rules)} 个匹配规则")
+                return merged_prompt
+            
+            else:
+                # 默认返回优先级最高的
+                matched_rules.sort(key=lambda x: x["priority"], reverse=True)
+                return matched_rules[0]["prompt"]
+                
+        except Exception as e:
+            logger.warning(f"{self.log_prefix} 关键词检测出错: {e}")
+            return ""
+
     async def _generate_detailed_content(self) -> Tuple[bool, str]:
         """生成详细内容"""
         try:
@@ -134,20 +221,30 @@ class DetailedExplanationAction(BaseAction):
             extra_prompt = self.get_config("content_generation.extra_prompt", "")
             model_task_name = self.get_config("content_generation.model_task", "replyer")
             
-            # 构建额外信息，指导生成详细内容（结构化，促进长文输出）
-            detailed_instruction = (
-                "请提供详细、完整的解释，不要受到字数限制。"
-                "请按‘概览→核心概念→工作原理/流程→关键要点与易错点→案例与对比→局限与常见误区→延伸阅读与参考’的结构展开。"
-                "在每个小节下给出尽可能充足的信息与示例，必要时给出列表与小标题。"
-                "保持回答的逻辑性和条理性，优先中文输出。"
-            )
-            
-            if extra_prompt:
-                detailed_instruction += f" {extra_prompt}"
-
             # 直连 LLM（绕过 replyer），构造提示词，带入人设与风格
             user_text = self.action_message.processed_plain_text if self.action_message else ""
             context_title = "群聊" if (self.chat_stream and self.chat_stream.group_info) else "私聊"
+            
+            # 检测关键词并获取对应的自定义 prompt
+            custom_prompt = self._detect_keyword_prompt(user_text)
+            
+            # 构建详细解释指令
+            if custom_prompt:
+                # 如果检测到关键词，使用自定义 prompt
+                detailed_instruction = custom_prompt
+                logger.info(f"{self.log_prefix} 使用关键词匹配的自定义 prompt")
+            else:
+                # 否则使用默认的结构化提示
+                detailed_instruction = (
+                    "请提供详细、完整的解释，不要受到字数限制。"
+                    "请按'概览→核心概念→工作原理/流程→关键要点与易错点→案例与对比→局限与常见误区→延伸阅读与参考'的结构展开。"
+                    "在每个小节下给出尽可能充足的信息与示例，必要时给出列表与小标题。"
+                    "保持回答的逻辑性和条理性，优先中文输出。"
+                )
+            
+            # 追加额外的 prompt 配置（如果有）
+            if extra_prompt:
+                detailed_instruction += f" {extra_prompt}"
 
             # 人设与风格
             bot_name = global_config.bot.nickname
@@ -511,6 +608,86 @@ class DetailedExplanationCommand(BaseCommand):
 
         return True, f"成功发送{len(segments)}段解释", True
 
+    def _detect_keyword_prompt(self, user_text: str) -> str:
+        """
+        检测用户输入中的关键词并返回对应的自定义 prompt
+        （与 Action 类中的方法相同）
+        
+        Args:
+            user_text: 用户输入文本
+            
+        Returns:
+            str: 匹配的自定义 prompt，如果未匹配则返回空字符串
+        """
+        try:
+            # 检查是否启用关键词检测
+            if not self.get_config("keyword_prompts.enable", True):
+                return ""
+            
+            # 获取配置
+            rules = self.get_config("keyword_prompts.rules", [])
+            if not rules or not isinstance(rules, list):
+                return ""
+            
+            case_sensitive = self.get_config("keyword_prompts.case_sensitive", False)
+            match_strategy = self.get_config("keyword_prompts.match_strategy", "highest")
+            
+            # 准备用户文本
+            text_to_match = user_text if case_sensitive else user_text.lower()
+            
+            # 收集所有匹配的规则
+            matched_rules = []
+            
+            for rule in rules:
+                if not isinstance(rule, dict):
+                    continue
+                    
+                keywords = rule.get("keywords", [])
+                prompt = rule.get("prompt", "")
+                priority = rule.get("priority", 0)
+                
+                if not keywords or not prompt:
+                    continue
+                
+                # 检查是否有关键词匹配
+                for keyword in keywords:
+                    if not isinstance(keyword, str):
+                        continue
+                    
+                    keyword_to_match = keyword if case_sensitive else keyword.lower()
+                    
+                    if keyword_to_match in text_to_match:
+                        matched_rules.append({
+                            "prompt": prompt,
+                            "priority": priority,
+                            "keyword": keyword
+                        })
+                        logger.info(f"命令检测到关键词: {keyword} (优先级: {priority})")
+                        break
+            
+            # 根据策略返回结果
+            if not matched_rules:
+                return ""
+            
+            if match_strategy == "first":
+                return matched_rules[0]["prompt"]
+            elif match_strategy == "highest":
+                matched_rules.sort(key=lambda x: x["priority"], reverse=True)
+                logger.info(f"命令选择优先级最高的规则 (优先级: {matched_rules[0]['priority']})")
+                return matched_rules[0]["prompt"]
+            elif match_strategy == "merge":
+                matched_rules.sort(key=lambda x: x["priority"], reverse=True)
+                merged_prompt = " ".join([rule["prompt"] for rule in matched_rules])
+                logger.info(f"命令合并了 {len(matched_rules)} 个匹配规则")
+                return merged_prompt
+            else:
+                matched_rules.sort(key=lambda x: x["priority"], reverse=True)
+                return matched_rules[0]["prompt"]
+                
+        except Exception as e:
+            logger.warning(f"命令关键词检测出错: {e}")
+            return ""
+
     async def _generate_content(self, topic: str) -> Tuple[bool, str]:
         """生成详细内容"""
         try:
@@ -521,13 +698,25 @@ class DetailedExplanationCommand(BaseCommand):
             task_cfg = models.get(model_task) or models.get("replyer")
             if not task_cfg:
                 return False, ""
-
+            
+            # 检测关键词并获取自定义 prompt
+            custom_prompt = self._detect_keyword_prompt(topic)
+            
+            # 构建详细解释指令
+            if custom_prompt:
+                # 使用自定义 prompt
+                instruction = custom_prompt
+                logger.info("命令使用关键词匹配的自定义 prompt")
+            else:
+                # 使用默认结构化提示
+                instruction = "请按'概览→核心概念→工作原理→关键要点→案例说明→常见误区'的结构展开。保持回答的逻辑性和条理性，优先中文输出。"
+            
             prompt = (
                 f"请对以下主题进行详细、系统的解释：\n\n"
                 f"主题：{topic}\n\n"
-                f"请按'概览→核心概念→工作原理→关键要点→案例说明→常见误区'的结构展开。"
-                f"保持回答的逻辑性和条理性，优先中文输出。"
+                f"{instruction}"
             )
+            
             if extra_prompt:
                 prompt += f" {extra_prompt}"
 
@@ -664,15 +853,16 @@ class DetailedExplanationPlugin(BasePlugin):
         "detailed_explanation": "详细解释功能配置",
         "activation": "激活方式配置",
         "content_generation": "内容生成配置",
-        "segmentation": "分段算法配置"
+        "segmentation": "分段算法配置",
+        "keyword_prompts": "关键词检测与动态Prompt配置"
     }
 
     # 配置Schema定义
     config_schema: dict = {
         "plugin": {
             "name": ConfigField(type=str, default="detailed_explanation", description="插件名称"),
-            "version": ConfigField(type=str, default="1.3.0", description="插件版本"),
-            "config_version": ConfigField(type=str, default="1.2.0", description="配置文件版本"),
+            "version": ConfigField(type=str, default="1.4.0", description="插件版本"),
+            "config_version": ConfigField(type=str, default="1.3.0", description="配置文件版本"),
             "enabled": ConfigField(type=bool, default=True, description="是否启用插件"),
         },
         "detailed_explanation": {
@@ -707,6 +897,12 @@ class DetailedExplanationPlugin(BasePlugin):
             "sentence_separators": ConfigField(type=list, default=["。", "！", "？", ".", "!", "?"], description="句子分割符"),
             "keep_paragraph_integrity": ConfigField(type=bool, default=True, description="是否保持段落完整性"),
             "min_paragraph_length": ConfigField(type=int, default=50, description="最小段落长度"),
+        },
+        "keyword_prompts": {
+            "enable": ConfigField(type=bool, default=True, description="是否启用关键词检测功能"),
+            "case_sensitive": ConfigField(type=bool, default=False, description="关键词检测是否大小写敏感"),
+            "match_strategy": ConfigField(type=str, default="highest", description="多匹配策略: first/highest/merge"),
+            "rules": ConfigField(type=list, default=[], description="关键词-prompt映射规则列表"),
         },
     }
 
