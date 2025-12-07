@@ -5,10 +5,11 @@
 ## 主要特性
 
 - 智能激活与人设风格融合：在 LLM 判断/关键词触发的基础上，自动注入 bot 人设、表达风格与当前心情，使长文保持麦麦的个性与语气。
+- **关键词检测与动态 Prompt（新）**：根据用户输入中的关键词（如"技术"、"历史"、"科学"等），自动选择对应领域的专业 prompt，让回答更精准、更专业。
 - 直连 LLM 长文生成：绕过 replyer 管道与全局分割器/表达器，使用 `llm_api` 按结构化提示生成完整长文。
 - 使用 replyer 模型集合：默认使用 `model_task_config.replyer` 模型集合，支持更长输出（更适合长文），也可在配置中切换。
 - 智能分段发送：保持段落完整优先，按设定长度和上限分段发送，可选显示进度与逐段 typing 效果。
-- 可选联网搜索增强：与 InternetSearchPlugin 协作，在“auto/always/never”模式下拼接搜索摘要，提升准确性与时效性。
+- 可选联网搜索增强：与 InternetSearchPlugin 协作，在"auto/always/never"模式下拼接搜索摘要，提升准确性与时效性。
 - 自动配置迁移：内置 `config_version` 版本化，升级时自动备份、迁移并写回新的配置结构。
 
 ## 激活条件
@@ -16,9 +17,11 @@
 插件会在以下情况下自动激活：
 
 ### 关键词触发
+
 当用户消息包含以下关键词时：`详细 / 科普 / 解释 / 说明 / 原理 / 深入 / 具体 / 详细说说` 等。
 
 ### 适用场景
+
 - 科普知识问答
 - 技术原理解释
 - 概念详细说明
@@ -38,11 +41,13 @@
 ## 配置说明
 
 ### 插件信息 `[plugin]`
+
 - `enabled`：是否启用插件（默认 true）
 - `version`：插件版本（自动维护）
 - `config_version`：配置文件版本（用于自动迁移）
 
 ### 基本设置 `[detailed_explanation]`
+
 - `enable`：是否启用详细解释功能（默认 true）
 - `max_total_length`：长文最大字符数（默认 3000，可按需增大，如 6000+）
 - `min_total_length`：长文最小字符数（默认 200，短则自动扩写最多两次）
@@ -53,21 +58,58 @@
 - `show_start_hint` / `start_hint_message`：是否显示开场提示与其文案
 
 ### 触发设置 `[activation]`
+
 - `activation_mode`：`llm_judge | keyword | mixed`（默认 llm_judge）
 - `strict_mode`：严格模式，开启后关键词大小写敏感
 - `custom_keywords`：自定义关键词列表
 
 ### 生成设置 `[content_generation]`
+
 - `model_task`：使用的模型集合（默认 `replyer`，可改为 `utils`/`utils_small`）
 - `enable_search`：是否启用联网搜索增强（默认 true）
 - `search_mode`：联网触发模式 `auto | always | never`（默认 auto）
 - `extra_prompt`：补充到系统结构化提示中的额外指令
 
 ### 分段设置 `[segmentation]`
+
 - `algorithm`：`smart | sentence | length`（默认 smart）
 - `sentence_separators`：句子分隔符
 - `keep_paragraph_integrity`：保持段落完整性（默认 true）
 - `min_paragraph_length`：段落合并的最小长度阈值（默认 50）
+
+### 关键词检测与动态 Prompt `[keyword_prompts]`（新增功能）
+
+- `enable`：是否启用关键词检测功能（默认 true）
+- `case_sensitive`：关键词检测是否大小写敏感（默认 false）
+- `match_strategy`：多关键词匹配策略
+  - `first`：使用第一个匹配的规则
+  - `highest`：使用优先级最高的规则（默认）
+  - `merge`：合并所有匹配规则的 prompt
+- `rules`：关键词-prompt 映射规则列表，每个规则包含：
+  - `keywords`：关键词列表（数组）
+  - `prompt`：对应的自定义提示词
+  - `priority`：优先级（数字越大优先级越高）
+
+**预置规则示例：**
+
+- 技术类（优先级 10）：检测到"技术"、"编程"、"代码"等关键词，使用技术专家视角
+- 历史文化类（优先级 8）：检测到"历史"、"文化"、"传统"等关键词，使用历史文化视角
+- 科学类（优先级 9）：检测到"科学"、"物理"、"化学"等关键词，使用科学研究视角
+- 商业经济类（优先级 7）：检测到"商业"、"经济"、"市场"等关键词，使用商业分析视角
+- 医学健康类（优先级 9）：检测到"医学"、"健康"、"疾病"等关键词，使用医学专业视角
+- 艺术设计类（优先级 6）：检测到"艺术"、"设计"、"美学"等关键词，使用艺术审美视角
+
+**使用场景：**
+
+```
+用户：详细解释一下 Python 编程的核心概念
+→ 检测到关键词"编程"，自动使用"技术专家视角"的 prompt
+→ 生成的内容会包含代码示例、最佳实践、技术对比等
+
+用户：讲讲中国历史上的重要事件
+→ 检测到关键词"历史"，自动使用"历史文化视角"的 prompt
+→ 生成的内容会包含历史脉络、文化背景、史料引用等
+```
 
 ## 工作原理与行为差异
 
@@ -109,4 +151,3 @@
 - 许可证：GPL-v3.0-or-later
 - 主页/仓库：https://github.com/MaiM-with-u/maibot
 - 反馈：请在仓库提交 Issue
-
