@@ -9,6 +9,9 @@
 - **性能**：上下文消息查询移至线程执行，避免阻塞事件循环
 - **效果**：上下文选取加入去噪/去重、保留最近尾部、相关性挑选与回复链优先
 
+### 兼容性 (Compatibility)
+- **联网插件适配**：支持 `google_search_plugin` 的 `web_search` 工具名；保留 `search_online` 回退，并可通过 `content_generation.search_tool_names` 配置优先级
+
 ## [1.4.0] - 2025-12-07
 
 ### 新增功能 (Added)

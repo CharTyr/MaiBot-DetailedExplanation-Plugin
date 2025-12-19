@@ -91,6 +91,9 @@ enable_search = true
 # 联网搜索触发模式: auto/always/never
 search_mode = "auto"
 
+# 联网工具名列表(按顺序尝试)，兼容 google_search_plugin/web_search 与 InternetSearchPlugin/search_online
+search_tool_names = ["web_search", "search_online"]
+
 
 # 分段算法配置
 [segmentation]

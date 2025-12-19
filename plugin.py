@@ -37,6 +37,59 @@ def _clamp_int(value: object, default: int, *, min_value: int, max_value: int) -
     return max(min_value, min(max_value, parsed))
 
 
+def _normalize_search_result(search_res: object) -> str:
+    if not search_res:
+        return ""
+    if isinstance(search_res, str):
+        return search_res.strip()
+    if isinstance(search_res, dict):
+        for key in ("content", "text", "result", "data", "answer", "summary"):
+            value = search_res.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return str(search_res).strip()
+    if isinstance(search_res, list):
+        parts = []
+        for item in search_res:
+            part = _normalize_search_result(item)
+            if part:
+                parts.append(part)
+        return "\n".join(parts).strip()
+    return str(search_res).strip()
+
+
+async def _search_with_available_tools(get_config: Callable[[str, object], object], query: str) -> str:
+    tool_names = get_config("content_generation.search_tool_names", None)
+    if not isinstance(tool_names, list) or not tool_names:
+        tool_names = ["web_search", "search_online"]
+
+    query = (query or "").strip()
+    if not query:
+        return ""
+
+    for tool_name in tool_names:
+        if not isinstance(tool_name, str) or not tool_name.strip():
+            continue
+        tool = tool_api.get_tool_instance(tool_name.strip())
+        if not tool:
+            continue
+        try:
+            raw = await tool.direct_execute(question=query[:200])  # type: ignore
+        except TypeError:
+            try:
+                raw = await tool.direct_execute(query=query[:200])  # type: ignore
+            except Exception:
+                continue
+        except Exception:
+            continue
+
+        content = _normalize_search_result(raw)
+        if content:
+            return content
+
+    return ""
+
+
 async def _run_sync(func, *args, **kwargs):
     to_thread = getattr(asyncio, "to_thread", None)
     if to_thread:
@@ -578,15 +631,13 @@ class DetailedExplanationAction(BaseAction):
                     need_search = any(k in search_query for k in keywords) or len(search_query) >= 12
                 if need_search:
                     try:
-                        tool = tool_api.get_tool_instance("search_online")
-                        if tool:
-                            logger.info(f"{self.log_prefix} 触发联网搜索以增强长文内容")
-                            search_res = await tool.direct_execute(question=search_query[:200])  # type: ignore
-                            if search_res:
-                                search_block = (
-                                    "\n\n[联网检索摘要]\n" + str(search_res).strip() +
-                                    "\n\n请在保证准确性的前提下吸收以上信息，若与常识冲突以检索为准，避免无依据的臆测与捏造。"
-                                )
+                        logger.info(f"{self.log_prefix} 触发联网搜索以增强长文内容")
+                        search_content = await _search_with_available_tools(self.get_config, search_query)
+                        if search_content:
+                            search_block = (
+                                "\n\n[联网检索摘要]\n" + search_content +
+                                "\n\n请在保证准确性的前提下吸收以上信息，若与常识冲突以检索为准，避免无依据的臆测与捏造。"
+                            )
                     except Exception as e:
                         logger.warning(f"{self.log_prefix} 联网搜索失败，跳过: {e}")
 
@@ -1027,11 +1078,9 @@ class DetailedExplanationCommand(BaseCommand):
             # 联网搜索增强
             if self.get_config("content_generation.enable_search", True):
                 try:
-                    tool = tool_api.get_tool_instance("search_online")
-                    if tool:
-                        search_res = await tool.direct_execute(question=topic[:200])
-                        if search_res:
-                            prompt += f"\n\n[参考资料]\n{str(search_res).strip()}"
+                    search_content = await _search_with_available_tools(self.get_config, topic)
+                    if search_content:
+                        prompt += f"\n\n[参考资料]\n{search_content}"
                 except Exception:
                     pass
 
@@ -1205,6 +1254,9 @@ class DetailedExplanationPlugin(BasePlugin):
             "model_task": ConfigField(type=str, default="replyer", description="使用的模型任务集合(如 replyer/utils/utils_small)"),
             "enable_search": ConfigField(type=bool, default=True, description="是否启用联网搜索增强"),
             "search_mode": ConfigField(type=str, default="auto", description="联网搜索触发模式: auto/always/never"),
+            "search_tool_names": ConfigField(
+                type=list, default=["web_search", "search_online"], description="联网工具名列表(按顺序尝试)，兼容google_search_plugin/web_search与InternetSearchPlugin/search_online"
+            ),
         },
         "segmentation": {
             "algorithm": ConfigField(type=str, default="smart", description="分段算法类型"),

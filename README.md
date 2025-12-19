@@ -69,6 +69,7 @@
 - `model_task`：使用的模型集合（默认 `replyer`，可改为 `utils`/`utils_small`）
 - `enable_search`：是否启用联网搜索增强（默认 true）
 - `search_mode`：联网触发模式 `auto | always | never`（默认 auto）
+- `search_tool_names`：联网工具名列表（默认 `["web_search","search_online"]`，兼容 `google_search_plugin` 与旧的 `InternetSearchPlugin`）
 - `extra_prompt`：补充到系统结构化提示中的额外指令
 
 ### 分段设置 `[segmentation]`
