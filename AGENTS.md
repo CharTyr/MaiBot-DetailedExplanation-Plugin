@@ -308,7 +308,7 @@ See LICENSE file for full text.
 - **Repository**: https://github.com/CharTyr/MaiBot-DetailedExplanation-Plugin
 - **Homepage**: https://github.com/CharTyr/MaiBot-DetailedExplanation-Plugin
 - **MaiBot Compatibility**: v0.11.0+
-- **Current Version**: 1.3.0
+- **Current Version**: 1.4.1
 
 ---
 

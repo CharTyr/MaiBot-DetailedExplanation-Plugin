@@ -6,7 +6,8 @@
 
 import asyncio
 import re
-from typing import List, Tuple, Type
+import time
+from typing import Callable, List, Optional, Tuple, Type
 
 from src.plugin_system import (
     BasePlugin,
@@ -20,12 +21,278 @@ from src.plugin_system import (
     register_plugin,
     get_logger,
 )
-from src.plugin_system.apis import llm_api, tool_api, send_api
+from src.plugin_system.apis import llm_api, message_api, tool_api, send_api
 from src.config.config import global_config
 from src.mood.mood_manager import mood_manager
 
 
 logger = get_logger("detailed_explanation")
+
+
+def _clamp_int(value: object, default: int, *, min_value: int, max_value: int) -> int:
+    try:
+        parsed = int(value)  # type: ignore[arg-type]
+    except Exception:
+        return default
+    return max(min_value, min(max_value, parsed))
+
+
+async def _run_sync(func, *args, **kwargs):
+    to_thread = getattr(asyncio, "to_thread", None)
+    if to_thread:
+        return await to_thread(func, *args, **kwargs)
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, lambda: func(*args, **kwargs))
+
+
+def _extract_tokens(text: str) -> set[str]:
+    if not text:
+        return set()
+    parts = re.findall(r"[A-Za-z0-9_]+|[\u4e00-\u9fff]{2,}", text)
+    return {p.lower() for p in parts if p}
+
+
+def _is_low_value_message(text: str) -> bool:
+    content = (text or "").strip()
+    if not content:
+        return True
+    if len(content) <= 1:
+        return True
+    if re.fullmatch(r"[\W_]+", content):
+        return True
+    if content in {"嗯", "哦", "噢", "啊", "哈", "好", "好的", "行", "可以", "收到", "ok", "OK"}:
+        return True
+    return False
+
+
+def _fetch_context_messages(
+    *,
+    chat_id: str,
+    start_time: float,
+    end_time: float,
+    limit: int,
+    include_bot_messages: bool,
+    max_intercept_level: Optional[int],
+) -> List:
+    return message_api.get_messages_by_time_in_chat(
+        chat_id=chat_id,
+        start_time=start_time,
+        end_time=end_time,
+        limit=limit,
+        limit_mode="latest",
+        filter_mai=not include_bot_messages,
+        filter_command=True,
+        filter_intercept_message_level=max_intercept_level,
+    )
+
+
+def _format_conversation_context_block(
+    *,
+    messages: List,
+    max_messages: int,
+    max_chars: int,
+    per_message_max_chars: int,
+    query_text: str,
+    current_user_id: Optional[str],
+    scope: str,
+    reply_to_message_id: Optional[str],
+) -> str:
+    if not messages or max_messages <= 0:
+        return ""
+
+    bot_id = str(getattr(global_config.bot, "qq_account", "") or "").strip()
+    query_tokens = _extract_tokens(query_text)
+
+    cleaned = []
+    seen_keys: set[tuple[str, str]] = set()
+    for msg in messages:
+        speaker = (getattr(msg, "user_nickname", None) or getattr(msg, "user_id", None) or "").strip() or "unknown"
+        raw_content = (getattr(msg, "processed_plain_text", None) or getattr(msg, "display_message", None) or "").strip()
+        if _is_low_value_message(raw_content):
+            continue
+
+        content = re.sub(r"\s+", " ", raw_content)
+        if per_message_max_chars > 0 and len(content) > per_message_max_chars:
+            content = content[:per_message_max_chars].rstrip() + "…"
+
+        key = (speaker, content)
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
+
+        cleaned.append(
+            {
+                "speaker": speaker,
+                "content": content,
+                "time": float(getattr(msg, "time", 0.0) or 0.0),
+                "message_id": str(getattr(msg, "message_id", "") or ""),
+                "user_id": str(getattr(msg, "user_id", "") or ""),
+            }
+        )
+
+    if not cleaned:
+        return ""
+
+    if scope == "user" and current_user_id:
+        allowed = {str(current_user_id)}
+        if bot_id:
+            allowed.add(bot_id)
+        cleaned = [it for it in cleaned if it["user_id"] in allowed]
+        if not cleaned:
+            return ""
+
+    baseline_tail = min(4, max_messages)
+    tail_items = cleaned[-baseline_tail:] if baseline_tail > 0 else []
+    tail_ids = {it["message_id"] for it in tail_items if it["message_id"]}
+
+    start_time = cleaned[0]["time"]
+    end_time = cleaned[-1]["time"]
+    denom = max(1.0, end_time - start_time)
+
+    for it in cleaned:
+        msg_tokens = _extract_tokens(it["content"])
+        overlap = len(query_tokens & msg_tokens) if query_tokens else 0
+        recency = (it["time"] - start_time) / denom
+        score = float(overlap) + 0.25 * recency
+        if it["user_id"] and current_user_id and it["user_id"] == str(current_user_id):
+            score += 0.5
+        if it["user_id"] and bot_id and it["user_id"] == bot_id:
+            score += 0.3
+        if reply_to_message_id and it["message_id"] == str(reply_to_message_id):
+            score += 1000.0
+        if it["message_id"] in tail_ids:
+            score += 50.0
+        it["score"] = score
+
+    selected: List[dict] = []
+    selected_ids: set[str] = set()
+
+    for it in cleaned[-baseline_tail:]:
+        selected.append(it)
+        if it["message_id"]:
+            selected_ids.add(it["message_id"])
+
+    remaining_slots = max_messages - len(selected)
+    if remaining_slots > 0:
+        candidates = [it for it in cleaned[:-baseline_tail] if it["message_id"] not in selected_ids]
+        candidates.sort(key=lambda x: x["score"], reverse=True)
+        for it in candidates[:remaining_slots]:
+            selected.append(it)
+            if it["message_id"]:
+                selected_ids.add(it["message_id"])
+
+    if reply_to_message_id and str(reply_to_message_id) and str(reply_to_message_id) not in selected_ids:
+        for it in cleaned:
+            if it["message_id"] == str(reply_to_message_id):
+                if selected:
+                    selected[0] = it
+                else:
+                    selected.append(it)
+                break
+
+    selected.sort(key=lambda x: x["time"])
+
+    chosen: List[dict] = []
+    total_chars = 0
+    selected_by_priority = sorted(selected, key=lambda x: x["score"], reverse=True)
+    for it in selected_by_priority:
+        line = f'{it["speaker"]}: {it["content"]}'
+        line_len = len(line) + 1
+        if chosen and total_chars + line_len > max_chars:
+            continue
+        if not chosen and line_len > max_chars:
+            line = line[: max_chars - 1] + "…"
+            line_len = len(line) + 1
+        it["line"] = line
+        chosen.append(it)
+        total_chars += line_len
+
+    if not chosen:
+        return ""
+
+    chosen.sort(key=lambda x: x["time"])
+    lines = [it["line"] for it in chosen if it.get("line")]
+    if not lines:
+        return ""
+
+    return "[会话上下文 - 最近对话摘录]\n" + "\n".join(lines)
+
+
+async def _build_conversation_context_block(
+    *,
+    get_config: Callable[[str, object], object],
+    chat_id: Optional[str],
+    end_time: float,
+    exclude_message_id: Optional[str] = None,
+    current_user_id: Optional[str] = None,
+    reply_to_message_id: Optional[str] = None,
+    query_text: str = "",
+) -> str:
+    if not chat_id:
+        return ""
+
+    if not bool(get_config("conversation_context.enable", True)):
+        return ""
+
+    scope = str(get_config("conversation_context.scope", "chat")).strip().lower()
+    if scope not in {"chat", "user"}:
+        scope = "chat"
+
+    max_messages = _clamp_int(get_config("conversation_context.max_messages", 12), 12, min_value=0, max_value=100)
+    if max_messages <= 0:
+        return ""
+
+    time_window_seconds = _clamp_int(
+        get_config("conversation_context.time_window_seconds", 1800), 1800, min_value=0, max_value=86400
+    )
+    max_chars = _clamp_int(get_config("conversation_context.max_chars", 1200), 1200, min_value=200, max_value=20000)
+    per_message_max_chars = _clamp_int(
+        get_config("conversation_context.per_message_max_chars", 240), 240, min_value=50, max_value=2000
+    )
+    include_bot_messages = bool(get_config("conversation_context.include_bot_messages", True))
+
+    max_intercept_level_raw = get_config("conversation_context.max_intercept_level", 0)
+    max_intercept_level = None
+    try:
+        max_intercept_level_int = int(max_intercept_level_raw)  # type: ignore[arg-type]
+        if max_intercept_level_int >= 0:
+            max_intercept_level = max_intercept_level_int
+    except Exception:
+        max_intercept_level = 0
+
+    start_time = max(0.0, end_time - float(time_window_seconds)) if time_window_seconds > 0 else 0.0
+
+    try:
+        raw_limit = max_messages * 4
+        messages = await _run_sync(
+            _fetch_context_messages,
+            chat_id=chat_id,
+            start_time=start_time,
+            end_time=end_time,
+            limit=raw_limit,
+            include_bot_messages=include_bot_messages,
+            max_intercept_level=max_intercept_level,
+        )
+    except Exception as e:
+        logger.warning(f"[{chat_id}] 拉取会话上下文失败，已跳过: {e}")
+        return ""
+
+    if exclude_message_id:
+        messages = [m for m in messages if m.message_id != exclude_message_id]
+
+    if not messages:
+        return ""
+
+    return _format_conversation_context_block(
+        messages=messages,
+        max_messages=max_messages,
+        max_chars=max_chars,
+        per_message_max_chars=per_message_max_chars,
+        query_text=query_text,
+        current_user_id=current_user_id,
+        scope=scope,
+        reply_to_message_id=reply_to_message_id,
+    )
 
 
 class DetailedExplanationAction(BaseAction):
@@ -223,6 +490,8 @@ class DetailedExplanationAction(BaseAction):
             
             # 直连 LLM（绕过 replyer），构造提示词，带入人设与风格
             user_text = self.action_message.processed_plain_text if self.action_message else ""
+            topic = str(self.action_data.get("topic", "") or "").strip()
+            planner_context = str(self.action_data.get("context", "") or "").strip()
             context_title = "群聊" if (self.chat_stream and self.chat_stream.group_info) else "私聊"
             
             # 检测关键词并获取对应的自定义 prompt
@@ -264,13 +533,28 @@ class DetailedExplanationAction(BaseAction):
                 f"行为风格：{plan_style}；当前心情：{current_mood}\n"
             ).strip()
 
+            conversation_context_block = await _build_conversation_context_block(
+                get_config=self.get_config,
+                chat_id=self.chat_id,
+                end_time=float(getattr(self.action_message, "time", time.time()) or time.time()),
+                exclude_message_id=str(getattr(self.action_message, "message_id", "") or "") or None,
+                current_user_id=str(self.user_id) if self.user_id else None,
+                reply_to_message_id=str(getattr(self.action_message, "reply_to", "") or "") or None,
+                query_text=(topic or user_text or "").strip(),
+            )
+
             prompt = (
                 f"你现在是一个专业的讲解员，负责为用户做深入、系统的科普与解释。\n"
                 f"对话场景：{context_title}。\n"
                 f"{style_block}\n\n"
-                f"用户消息：{user_text}\n\n"
-                f"请基于用户的真实意图进行回答。{detailed_instruction}"
             )
+            if conversation_context_block:
+                prompt += f"{conversation_context_block}\n\n"
+            if planner_context:
+                prompt += f"[补充上下文]\n{planner_context}\n\n"
+            if topic and topic != user_text:
+                prompt += f"用户想了解的主题：{topic}\n\n"
+            prompt += f"用户消息：{user_text}\n\n请基于用户的真实意图进行回答。{detailed_instruction}"
 
             models = llm_api.get_available_models()
             task_cfg = models.get(model_task_name) or models.get("replyer")
@@ -282,7 +566,8 @@ class DetailedExplanationAction(BaseAction):
             search_enabled = bool(self.get_config("content_generation.enable_search", True))
             search_mode = str(self.get_config("content_generation.search_mode", "auto")).lower()
             search_block = ""
-            if search_enabled and user_text:
+            search_query = (topic or user_text or "").strip()
+            if search_enabled and search_query:
                 need_search = search_mode == "always"
                 if search_mode == "auto":
                     # 简单启发式：时效/知识性问题更可能需要联网
@@ -290,13 +575,13 @@ class DetailedExplanationAction(BaseAction):
                         "为什么", "怎么", "如何", "最新", "近期", "新闻", "更新", "发布",
                         "爆料", "评测", "对比", "性能", "配置", "参数",
                     ]
-                    need_search = any(k in user_text for k in keywords) or len(user_text) >= 12
+                    need_search = any(k in search_query for k in keywords) or len(search_query) >= 12
                 if need_search:
                     try:
                         tool = tool_api.get_tool_instance("search_online")
                         if tool:
                             logger.info(f"{self.log_prefix} 触发联网搜索以增强长文内容")
-                            search_res = await tool.direct_execute(question=user_text[:200])  # type: ignore
+                            search_res = await tool.direct_execute(question=search_query[:200])  # type: ignore
                             if search_res:
                                 search_block = (
                                     "\n\n[联网检索摘要]\n" + str(search_res).strip() +
@@ -711,11 +996,30 @@ class DetailedExplanationCommand(BaseCommand):
                 # 使用默认结构化提示
                 instruction = "请按'概览→核心概念→工作原理→关键要点→案例说明→常见误区'的结构展开。保持回答的逻辑性和条理性，优先中文输出。"
             
+            reply_to_message_id = None
+            try:
+                if getattr(self.message, "reply", None) and getattr(self.message.reply, "message_info", None):
+                    reply_to_message_id = str(getattr(self.message.reply.message_info, "message_id", "") or "") or None
+            except Exception:
+                reply_to_message_id = None
+
+            conversation_context_block = await _build_conversation_context_block(
+                get_config=self.get_config,
+                chat_id=getattr(self.message.chat_stream, "stream_id", None),
+                end_time=float(getattr(self.message.message_info, "time", time.time()) or time.time()),
+                exclude_message_id=str(getattr(self.message.message_info, "message_id", "") or "") or None,
+                current_user_id=str(getattr(self.message.message_info.user_info, "user_id", "") or "") or None,
+                reply_to_message_id=reply_to_message_id,
+                query_text=topic,
+            )
+
             prompt = (
                 f"请对以下主题进行详细、系统的解释：\n\n"
                 f"主题：{topic}\n\n"
                 f"{instruction}"
             )
+            if conversation_context_block:
+                prompt = f"{conversation_context_block}\n\n" + prompt
             
             if extra_prompt:
                 prompt += f" {extra_prompt}"
@@ -816,9 +1120,18 @@ class DetailedExplanationTool(BaseTool):
             if not task_cfg:
                 return {"name": self.name, "content": "模型配置不可用"}
 
+            conversation_context_block = await _build_conversation_context_block(
+                get_config=self.get_config,
+                chat_id=self.chat_id,
+                end_time=time.time(),
+                query_text=str(topic or "").strip(),
+            )
+
             prompt = f"请对以下主题进行详细解释：\n\n主题：{topic}"
+            if conversation_context_block:
+                prompt = f"{conversation_context_block}\n\n" + prompt
             if context:
-                prompt += f"\n上下文：{context}"
+                prompt += f"\n\n[补充上下文]\n{context}"
             prompt += "\n\n请提供结构化、详细的解释。"
 
             success, content, _, _ = await llm_api.generate_with_model(
@@ -854,15 +1167,16 @@ class DetailedExplanationPlugin(BasePlugin):
         "activation": "激活方式配置",
         "content_generation": "内容生成配置",
         "segmentation": "分段算法配置",
-        "keyword_prompts": "关键词检测与动态Prompt配置"
+        "keyword_prompts": "关键词检测与动态Prompt配置",
+        "conversation_context": "会话上下文配置",
     }
 
     # 配置Schema定义
     config_schema: dict = {
         "plugin": {
             "name": ConfigField(type=str, default="detailed_explanation", description="插件名称"),
-            "version": ConfigField(type=str, default="1.4.0", description="插件版本"),
-            "config_version": ConfigField(type=str, default="1.3.0", description="配置文件版本"),
+            "version": ConfigField(type=str, default="1.4.1", description="插件版本"),
+            "config_version": ConfigField(type=str, default="1.4.0", description="配置文件版本"),
             "enabled": ConfigField(type=bool, default=True, description="是否启用插件"),
         },
         "detailed_explanation": {
@@ -903,6 +1217,18 @@ class DetailedExplanationPlugin(BasePlugin):
             "case_sensitive": ConfigField(type=bool, default=False, description="关键词检测是否大小写敏感"),
             "match_strategy": ConfigField(type=str, default="highest", description="多匹配策略: first/highest/merge"),
             "rules": ConfigField(type=list, default=[], description="关键词-prompt映射规则列表"),
+        },
+        "conversation_context": {
+            "enable": ConfigField(type=bool, default=True, description="是否启用会话上下文注入"),
+            "scope": ConfigField(type=str, default="chat", description="上下文范围: chat(整个会话)/user(仅当前用户+机器人)"),
+            "max_messages": ConfigField(type=int, default=12, description="最多带入的历史消息条数"),
+            "time_window_seconds": ConfigField(type=int, default=1800, description="上下文时间窗口(秒)"),
+            "max_chars": ConfigField(type=int, default=1200, description="上下文最大字符数(近似)"),
+            "per_message_max_chars": ConfigField(type=int, default=240, description="单条历史消息最大字符数(超出截断)"),
+            "include_bot_messages": ConfigField(type=bool, default=True, description="是否包含机器人历史消息"),
+            "max_intercept_level": ConfigField(
+                type=int, default=0, description="最大拦截等级(<=保留)，-1表示不过滤(包含被拦截的消息)"
+            ),
         },
     }
 

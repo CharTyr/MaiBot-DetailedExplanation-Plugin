@@ -1,8 +1,8 @@
 {
   "manifest_version": 1,
   "name": "麦麦细说 (Detailed Explanation Plugin)",
-  "version": "1.4.0",
-  "description": "当需要详细解释科普、技术等复杂内容时，生成完整的长文本回复并智能分段发送。支持关键词检测与动态 Prompt 配置。",
+  "version": "1.4.1",
+  "description": "当需要详细解释科普、技术等复杂内容时，生成完整的长文本回复并智能分段发送。支持关键词检测与动态 Prompt 配置，并可注入会话上下文。",
   "author": {
     "name": "CharTyr",
     "url": "https://github.com/CharTyr"
@@ -59,7 +59,8 @@
       "支持科普、技术解答等复杂内容",
       "可配置分段参数和发送延迟",
       "支持命令主动触发：/细说 xxx",
-      "提供 LLM 可调用的工具接口"
+      "提供 LLM 可调用的工具接口",
+      "支持会话上下文注入（多轮追问/承接上文）"
     ]
   }
 }

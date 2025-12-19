@@ -8,6 +8,7 @@
 - **关键词检测与动态 Prompt（新）**：根据用户输入中的关键词（如"技术"、"历史"、"科学"等），自动选择对应领域的专业 prompt，让回答更精准、更专业。
 - 直连 LLM 长文生成：绕过 replyer 管道与全局分割器/表达器，使用 `llm_api` 按结构化提示生成完整长文。
 - 使用 replyer 模型集合：默认使用 `model_task_config.replyer` 模型集合，支持更长输出（更适合长文），也可在配置中切换。
+- 支持会话上下文：自动带入最近对话摘录，更适合“继续展开/承接上文/多轮追问”等场景。
 - 智能分段发送：保持段落完整优先，按设定长度和上限分段发送，可选显示进度与逐段 typing 效果。
 - 可选联网搜索增强：与 InternetSearchPlugin 协作，在"auto/always/never"模式下拼接搜索摘要，提升准确性与时效性。
 - 自动配置迁移：内置 `config_version` 版本化，升级时自动备份、迁移并写回新的配置结构。
@@ -77,6 +78,17 @@
 - `keep_paragraph_integrity`：保持段落完整性（默认 true）
 - `min_paragraph_length`：段落合并的最小长度阈值（默认 50）
 
+### 会话上下文 `[conversation_context]`（新增功能）
+
+- `enable`：是否启用会话上下文注入（默认 true）
+- `scope`：`chat | user`（默认 chat；群聊推荐 user 以减少噪声）
+- `max_messages`：最多带入的历史消息条数（默认 12）
+- `time_window_seconds`：时间窗口秒数（默认 1800）
+- `max_chars`：上下文最大字符数（默认 1200）
+- `per_message_max_chars`：单条历史消息最大字符数（默认 240，超出截断）
+- `include_bot_messages`：是否包含机器人历史消息（默认 true）
+- `max_intercept_level`：最大拦截等级（默认 0；设为 -1 表示不过滤）
+
 ### 关键词检测与动态 Prompt `[keyword_prompts]`（新增功能）
 
 - `enable`：是否启用关键词检测功能（默认 true）
@@ -145,6 +157,8 @@
   - 注入人设/风格/情绪
   - 集成 InternetSearchPlugin（auto/always/never）
   - 启用 `config_version` 自动迁移
+- 1.4.1
+  - 支持会话上下文注入（多轮追问/承接上文）
 
 ## 项目信息
 
