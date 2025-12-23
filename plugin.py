@@ -23,7 +23,10 @@ from src.plugin_system import (
 )
 from src.plugin_system.apis import llm_api, message_api, tool_api, send_api
 from src.config.config import global_config
-from src.mood.mood_manager import mood_manager
+try:
+    from src.mood.mood_manager import mood_manager  # MaiBot <= 0.11
+except Exception:  # MaiBot >= 0.12 (mood module removed)
+    mood_manager = None
 
 
 logger = get_logger("detailed_explanation")
@@ -575,10 +578,12 @@ class DetailedExplanationAction(BaseAction):
             persona_block = str(global_config.personality.personality or "").strip()
             reply_style = str(global_config.personality.reply_style or "").strip()
             plan_style = str(global_config.personality.plan_style or "").strip()
-            try:
-                current_mood = mood_manager.get_mood_by_chat_id(self.chat_stream.stream_id).mood_state
-            except Exception:
-                current_mood = "感觉很平静"
+            current_mood = "感觉很平静"
+            if mood_manager and self.chat_stream:
+                try:
+                    current_mood = mood_manager.get_mood_by_chat_id(self.chat_stream.stream_id).mood_state
+                except Exception:
+                    current_mood = "感觉很平静"
 
             style_block = (
                 f"身份与人设：{identity_block}{persona_block}\n"
@@ -1224,7 +1229,7 @@ class DetailedExplanationPlugin(BasePlugin):
     config_schema: dict = {
         "plugin": {
             "name": ConfigField(type=str, default="detailed_explanation", description="插件名称"),
-            "version": ConfigField(type=str, default="1.4.1", description="插件版本"),
+            "version": ConfigField(type=str, default="1.4.2", description="插件版本"),
             "config_version": ConfigField(type=str, default="1.4.0", description="配置文件版本"),
             "enabled": ConfigField(type=bool, default=True, description="是否启用插件"),
         },

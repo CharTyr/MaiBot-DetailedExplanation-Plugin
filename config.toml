@@ -8,7 +8,7 @@
 name = "detailed_explanation"
 
 # 插件版本
-version = "1.4.1"
+version = "1.4.2"
 
 # 配置文件版本
 config_version = "1.4.0"
@@ -154,7 +154,6 @@ priority = 9
 keywords = ["艺术", "设计", "美学", "创作"]
 prompt = "请从艺术审美的角度进行深入分析。要求：1) 解读艺术特征和表现手法；2) 分析美学理念和创作意图；3) 介绍历史发展和流派风格；4) 评价作品价值和影响；5) 启发审美思考和创作灵感。"
 priority = 6
-
 
 # 会话上下文配置
 [conversation_context]

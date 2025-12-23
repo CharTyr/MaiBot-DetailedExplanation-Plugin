@@ -1,5 +1,14 @@
 # 更新日志 (Changelog)
 
+## [1.4.2] - 2025-12-23
+
+### 修复 (Fixed)
+- 适配 MaiBot 0.12+：`mood` 模块移除后不再导致插件加载失败（`No module named 'src.mood'`）
+
+### 兼容性 (Compatibility)
+- ✅ `main` 分支面向 MaiBot 0.12+（情绪注入自动降级为默认心情文案）
+- ✅ 需要 MaiBot 0.11 及更早版本的完整情绪注入请使用 `maibot-0.11` 分支
+
 ## [1.4.1] - 2025-12-19
 
 ### 新增功能 (Added)
