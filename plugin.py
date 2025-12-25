@@ -31,6 +31,8 @@ except Exception:  # MaiBot >= 0.12 (mood module removed)
 
 logger = get_logger("detailed_explanation")
 
+_LLM_JUDGE = getattr(ActionActivationType, "LLM_JUDGE", ActionActivationType.ALWAYS)
+
 
 def _clamp_int(value: object, default: int, *, min_value: int, max_value: int) -> int:
     try:
@@ -359,7 +361,7 @@ class DetailedExplanationAction(BaseAction):
     action_description = "生成详细的长文本解释并智能分段发送"
     
     # 改为由 LLM 判断是否需要使用该动作（Planner 会始终看到该动作选项）
-    activation_type = ActionActivationType.LLM_JUDGE
+    activation_type = _LLM_JUDGE
 
     # 备用关键词（用于其他组件或回退策略，不影响 LLM_JUDGE 的主流程）
     _default_activation_keywords = [
@@ -580,10 +582,12 @@ class DetailedExplanationAction(BaseAction):
             plan_style = str(global_config.personality.plan_style or "").strip()
             current_mood = "感觉很平静"
             if mood_manager and self.chat_stream:
-                try:
-                    current_mood = mood_manager.get_mood_by_chat_id(self.chat_stream.stream_id).mood_state
-                except Exception:
-                    current_mood = "感觉很平静"
+                current_mood = "感觉很平静"
+                if mood_manager is not None:
+                    try:
+                        current_mood = mood_manager.get_mood_by_chat_id(self.chat_stream.stream_id).mood_state
+                    except Exception:
+                        current_mood = "感觉很平静"
 
             style_block = (
                 f"身份与人设：{identity_block}{persona_block}\n"
